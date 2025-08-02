@@ -39,9 +39,9 @@ export class AutoShutdown extends Construct {
       resources: ['*']
     }));
 
-    // Schedule to run every 15 minutes
+    // Schedule to run every 60 minutes
     const rule = new events.Rule(this, 'IdleCheckRule', {
-      schedule: events.Schedule.rate(cdk.Duration.minutes(15))
+      schedule: events.Schedule.rate(cdk.Duration.minutes(60))
     });
 
     rule.addTarget(new targets.LambdaFunction(shutdownFunction));

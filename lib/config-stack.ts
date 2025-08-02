@@ -9,13 +9,15 @@ export interface ConfigStackProps extends cdk.StackProps {
 }
 
 export class ConfigStack extends cdk.Stack {
-  public readonly instanceVolumeSize: ssm.StringParameter;
-  public readonly repositoryOwner: ssm.StringParameter;
-  public readonly repositoryName: ssm.StringParameter;
-  public readonly repositoryRef: ssm.StringParameter;
-  public readonly codeServerVersion: ssm.StringParameter;
-  public readonly vpcCidr: ssm.StringParameter;
-  public readonly instanceType: ssm.StringParameter;
+  private parameters: { [key: string]: ssm.StringParameter } = {};
+
+  public get instanceVolumeSize(): ssm.StringParameter { return this.parameters['instanceVolumeSize']; }
+  public get repositoryOwner(): ssm.StringParameter { return this.parameters['repositoryOwner']; }
+  public get repositoryName(): ssm.StringParameter { return this.parameters['repositoryName']; }
+  public get repositoryRef(): ssm.StringParameter { return this.parameters['repositoryRef']; }
+  public get codeServerVersion(): ssm.StringParameter { return this.parameters['codeServerVersion']; }
+  public get vpcCidr(): ssm.StringParameter { return this.parameters['vpcCidr']; }
+  public get instanceType(): ssm.StringParameter { return this.parameters['instanceType']; }
 
   constructor(scope: Construct, id: string, props?: ConfigStackProps) {
     super(scope, id, props);
@@ -34,14 +36,8 @@ export class ConfigStack extends cdk.Stack {
         description: config.description
       });
       
-      // Assign to specific properties
-      if (key === 'instanceVolumeSize') this.instanceVolumeSize = parameter;
-      else if (key === 'repositoryOwner') this.repositoryOwner = parameter;
-      else if (key === 'repositoryName') this.repositoryName = parameter;
-      else if (key === 'repositoryRef') this.repositoryRef = parameter;
-      else if (key === 'codeServerVersion') this.codeServerVersion = parameter;
-      else if (key === 'vpcCidr') this.vpcCidr = parameter;
-      else if (key === 'instanceType') this.instanceType = parameter;
+      // Store in parameters map
+      this.parameters[key] = parameter;
     });
 
     // Outputs for cross-stack reference

@@ -81,20 +81,27 @@ export class EksCodeServerIdeStack extends cdk.Stack {
       ]
     });
 
-    // Security Group
+    // Main Security Group
     const securityGroup = new ec2.SecurityGroup(this, 'SecurityGroup', {
       vpc,
       description: 'SG for IDE',
       allowAllOutbound: true
     });
 
-    // Add ingress rule for CloudFront
+    // Separate CloudFront Security Group to avoid rule limits
+    const cloudFrontSG = new ec2.SecurityGroup(this, 'CloudFrontSecurityGroup', {
+      vpc,
+      description: 'CloudFront access to code-server',
+      allowAllOutbound: false
+    });
+
+    // Add CloudFront access rule to separate SG
     const prefixListId = prefixListMapping[this.region];
     if (prefixListId) {
-      securityGroup.addIngressRule(
+      cloudFrontSG.addIngressRule(
         ec2.Peer.prefixList(prefixListId),
         ec2.Port.tcp(80),
-        'Allow HTTP from CloudFront'
+        'Allow Caddy from CloudFront'
       );
     }
 
@@ -113,6 +120,25 @@ export class EksCodeServerIdeStack extends cdk.Stack {
       enableKeyRotation: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
+
+    // Add CloudWatch Logs permissions to KMS key
+    kmsKey.addToResourcePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      principals: [new iam.ServicePrincipal(`logs.${this.region}.amazonaws.com`)],
+      actions: [
+        'kms:Encrypt',
+        'kms:Decrypt',
+        'kms:ReEncrypt*',
+        'kms:GenerateDataKey*',
+        'kms:DescribeKey'
+      ],
+      resources: ['*'],
+      conditions: {
+        ArnEquals: {
+          'kms:EncryptionContext:aws:logs:arn': `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/lambda/bootstrap-${this.stackName}`
+        }
+      }
+    }));
 
     // Password Secret for code-server authentication
     const idePassword = new secretsmanager.Secret(this, 'EksWorkshopIdePassword', {
@@ -149,8 +175,17 @@ export class EksCodeServerIdeStack extends cdk.Stack {
                 'secretsmanager:GetSecretValue'
               ],
               resources: [
-
                 idePassword.secretArn
+              ]
+            }),
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'kms:Decrypt',
+                'kms:DescribeKey'
+              ],
+              resources: [
+                kmsKey.keyArn
               ]
             })
           ]
@@ -184,6 +219,9 @@ export class EksCodeServerIdeStack extends cdk.Stack {
       ]
     });
 
+    // Add CloudFront security group to instance
+    instance.addSecurityGroup(cloudFrontSG);
+
     // Add Project tag for SSM access control
     cdk.Tags.of(instance).add('Project', 'code-server-ide');
 
@@ -202,11 +240,12 @@ export class EksCodeServerIdeStack extends cdk.Stack {
       enableAcceptEncodingGzip: false
     });
 
-    // CloudFront Distribution (created after instance)
+    // CloudFront Distribution (created with placeholder origin)
     const distribution = new cloudfront.Distribution(this, 'EksWorkshopIdeCloudFrontDistribution', {
       defaultBehavior: {
-        origin: new origins.HttpOrigin(instance.instancePublicDnsName, {
-          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY
+        origin: new origins.HttpOrigin('placeholder.example.com', {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          httpPort: 80
         }),
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
@@ -221,6 +260,7 @@ export class EksCodeServerIdeStack extends cdk.Stack {
         encryption: s3.BucketEncryption.KMS,
         encryptionKey: kmsKey,
         blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+        objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_PREFERRED,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
         autoDeleteObjects: true
       }),
@@ -305,13 +345,24 @@ export class EksCodeServerIdeStack extends cdk.Stack {
               actions: [
                 'ssm:SendCommand',
                 'ssm:GetCommandInvocation',
-                'ssm:DescribeInstanceInformation'
+                'ssm:DescribeInstanceInformation',
+                'ec2:DescribeInstances'
               ],
               resources: [
                 `arn:aws:ssm:${this.region}:${this.account}:document/*`,
                 `arn:aws:ec2:${this.region}:${this.account}:instance/*`,
-                `arn:aws:ssm:${this.region}:${this.account}:*`
+                `arn:aws:ssm:${this.region}:${this.account}:*`,
+                '*'  // EC2 DescribeInstances requires wildcard
               ]
+            }),
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'cloudfront:UpdateDistribution',
+                'cloudfront:GetDistribution',
+                'cloudfront:GetDistributionConfig'
+              ],
+              resources: ['*']  // CloudFront requires wildcard for distribution operations
             })
           ]
         })
@@ -334,7 +385,6 @@ export class EksCodeServerIdeStack extends cdk.Stack {
       memorySize: 256,
       code: lambda.Code.fromAsset('lib/lambda'),
       deadLetterQueue: dlq,
-      reservedConcurrentExecutions: 1,
       logGroup: new logs.LogGroup(this, 'BootstrapLambdaLogGroup', {
         logGroupName: `/aws/lambda/bootstrap-${this.stackName}`,
         retention: logs.RetentionDays.ONE_MONTH,
@@ -349,7 +399,10 @@ export class EksCodeServerIdeStack extends cdk.Stack {
       properties: {
         InstanceId: instance.instanceId,
         DocumentName: ssmDocument.ref,
-        CloudFrontDomain: distribution.distributionDomainName  // Pass CloudFront domain to Lambda
+        CloudFrontDomain: distribution.distributionDomainName,
+        CloudFrontDistributionId: distribution.distributionId,
+        // Force re-run with KMS permissions fix
+        Timestamp: Date.now().toString()
       }
     });
     

@@ -305,6 +305,43 @@ cdk destroy EksCodeServerIdeStackV2
 cdk --app 'npx ts-node --prefer-ts-exts bin/config-app.ts' destroy
 ```
 
+## Recent Fixes & Improvements
+
+### Password Authentication Fix
+- **KMS Permissions**: Added proper KMS decrypt permissions to EC2 instance role for Secrets Manager access
+- **Secret Retrieval**: Fixed bootstrap script to properly retrieve and hash passwords from AWS Secrets Manager
+- **Argon2 Hashing**: Implemented secure password hashing with proper salt generation
+
+### CloudFront Configuration Fix
+- **Port Configuration**: Updated CloudFront origin from port 8889 to port 80 (Caddy reverse proxy)
+- **Automatic Origin Update**: Lambda function now automatically updates CloudFront distribution origin from placeholder to actual EC2 DNS
+- **Network Flow**: CloudFront → EC2:80 → Caddy → localhost:8889 → code-server
+
+### Lambda Function Improvements
+- **CREATE/UPDATE Handling**: Fixed Lambda to handle both CREATE and UPDATE CloudFormation requests
+- **CloudFront Updates**: Automatic origin updates during stack updates without re-bootstrapping
+- **Error Handling**: Improved error handling and logging for troubleshooting
+
+### Key Architectural Improvements
+
+#### Password Security Flow
+- **Secure Generation**: AWS Secrets Manager creates random passwords with encryption
+- **Permission Chain**: EC2 instance → KMS key → decrypt secret → retrieve password
+- **Hash Protection**: Password is hashed with Argon2 before storage in code-server config
+- **No Plain Text**: Password never stored in plain text anywhere in the system
+
+#### Network Traffic Flow
+- **User Request**: Browser → CloudFront (HTTPS)
+- **CDN to Origin**: CloudFront → EC2 instance (HTTP port 80)
+- **Reverse Proxy**: Caddy receives request and forwards to code-server (localhost:8889)
+- **Response Path**: code-server → Caddy → CloudFront → Browser
+
+#### Deployment Automation
+- **Bootstrap Process**: Lambda function coordinates instance setup via SSM
+- **Dynamic Updates**: CloudFront origin automatically updated from placeholder to real EC2 DNS
+- **State Management**: CREATE operations run full bootstrap, UPDATE operations only update CloudFront
+- **Self-Healing**: System automatically configures itself without manual intervention
+
 ## Troubleshooting
 
 ### Common Issues
@@ -314,11 +351,13 @@ cdk --app 'npx ts-node --prefer-ts-exts bin/config-app.ts' destroy
 - **Bootstrap Timeout**: Lambda function has 15-minute timeout
 - **CloudFront 502**: Code-server may still be starting (wait 5-10 minutes)
 - **Access Denied**: Verify IAM permissions for all required services
+- **KMS Access Denied**: Ensure EC2 instance role has KMS decrypt permissions for secrets
 
 #### Runtime Issues
-- **Login Failed**: Check Secrets Manager for correct password
+- **Login Failed**: Check Secrets Manager for correct password and verify KMS permissions
 - **Auto-Shutdown Not Working**: Verify EventBridge rule is enabled
 - **Performance Issues**: Consider upgrading instance type via Config Stack
+- **CloudFront Origin Issues**: Lambda automatically updates origin during deployment
 
 ### Debugging Resources
 
