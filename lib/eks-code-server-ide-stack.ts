@@ -222,6 +222,10 @@ export class EksCodeServerIdeStack extends cdk.Stack {
     // Add CloudFront security group to instance
     instance.addSecurityGroup(cloudFrontSG);
 
+    // Get parameter values for tagging
+    const appName = props.appName ?? 'code-server-ide';
+    const parameterEnvironment = props.parameterEnvironment ?? 'dev';
+
     // Add comprehensive tags for cost tracking and management
     const commonTags = {
       'Project': 'code-server-ide',
@@ -283,8 +287,6 @@ export class EksCodeServerIdeStack extends cdk.Stack {
     // CloudFront automatically depends on instance via instancePublicDnsName reference
 
     // Store instance ID in SSM for separate auto-shutdown stack
-    const appName = props.appName ?? 'code-server-ide';
-    const parameterEnvironment = props.parameterEnvironment ?? 'dev';
     const naming = new ParameterNaming(appName, this.account, parameterEnvironment);
     new ssm.StringParameter(this, 'InstanceIdSSMParameter', {
       parameterName: naming.generateParameterName('compute', 'instance-id'),

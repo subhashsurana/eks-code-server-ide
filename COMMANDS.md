@@ -402,4 +402,201 @@ EOF
 # Dynamic one-liner to start instance
 aws ec2 start-instances --instance-ids $(aws ssm get-parameter --name "/code-server-ide/$(aws sts get-caller-identity --query Account --output text)/dev/compute/instance-id" --query 'Parameter.Value' --output text) && echo "Instance starting..."
 ```
+
+## Cost Tracking & Tag Management
+
+### Resource Tag Scanning
+
+#### List All Resources with Tags
+```bash
+# Get all resources in the region with their tags
+aws resourcegroupstaggingapi get-resources --output table
+
+# Filter by specific tag
+aws resourcegroupstaggingapi get-resources \
+  --tag-filters Key=Project,Values=code-server-ide \
+  --output table
+```
+
+#### EC2 Instance Tags
+```bash
+# Get EC2 instance tags
+aws ec2 describe-instances \
+  --filters "Name=tag:Project,Values=code-server-ide" \
+  --query 'Reservations[*].Instances[*].{InstanceId:InstanceId,Tags:Tags}' \
+  --output table
+
+# Get specific instance tags
+INSTANCE_ID=$(aws ssm get-parameter --name "/code-server-ide/325635966203/dev/compute/instance-id" --query 'Parameter.Value' --output text)
+aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" --output table
+```
+
+#### CloudFormation Stack Tags
+```bash
+# Get stack-level tags
+aws cloudformation describe-stacks \
+  --stack-name EksCodeServerIdeStackV2 \
+  --query 'Stacks[0].Tags' \
+  --output table
+
+# Get all stack resources with tags
+aws cloudformation list-stack-resources \
+  --stack-name EksCodeServerIdeStackV2 \
+  --output table
+```
+
+### Cost Analysis by Tags
+
+#### Current Month Costs
+```bash
+# Current month costs by Project tag
+aws ce get-cost-and-usage \
+  --time-period Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d) \
+  --granularity DAILY \
+  --metrics BlendedCost \
+  --group-by Type=TAG,Key=Project \
+  --output table
+
+# Costs by multiple tags
+aws ce get-cost-and-usage \
+  --time-period Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d) \
+  --granularity MONTHLY \
+  --metrics BlendedCost \
+  --group-by Type=TAG,Key=Environment Type=TAG,Key=CostCenter \
+  --filter '{"Tags":{"Key":"Project","Values":["code-server-ide"]}}' \
+  --output table
+```
+
+#### Historical Cost Analysis
+```bash
+# Last 3 months costs by project
+aws ce get-cost-and-usage \
+  --time-period Start=$(date -d '3 months ago' +%Y-%m-01),End=$(date +%Y-%m-%d) \
+  --granularity MONTHLY \
+  --metrics BlendedCost \
+  --filter '{"Tags":{"Key":"Project","Values":["code-server-ide"]}}' \
+  --output table
+
+# Daily costs for current month
+aws ce get-cost-and-usage \
+  --time-period Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d) \
+  --granularity DAILY \
+  --metrics BlendedCost \
+  --filter '{"Tags":{"Key":"Project","Values":["code-server-ide"]}}' \
+  --query 'ResultsByTime[*].{Date:TimePeriod.Start,Cost:Total.BlendedCost.Amount}' \
+  --output table
+```
+
+### Tag Compliance & Monitoring
+
+#### Tag Compliance Check
+```bash
+# Find resources missing required tags
+aws resourcegroupstaggingapi get-resources \
+  --resource-type-filters "AWS::EC2::Instance" "AWS::CloudFront::Distribution" \
+  --query 'ResourceTagMappingList[?!Tags || length(Tags[?Key==`Project`]) == `0`]' \
+  --output table
+
+# Verify all expected tags are present
+aws resourcegroupstaggingapi get-resources \
+  --tag-filters Key=Project,Values=code-server-ide \
+  --query 'ResourceTagMappingList[*].Tags[?Key==`Environment` || Key==`CostCenter` || Key==`Owner` || Key==`AutoShutdown`]' \
+  --output table
+```
+
+#### Tag Report Script
+```bash
+# Create comprehensive tag report
+cat > tag-report.sh << 'EOF'
+#!/bin/bash
+echo "=== EKS Code Server IDE - Tag Report ==="
+echo ""
+
+echo "Stack Resources:"
+aws resourcegroupstaggingapi get-resources \
+  --tag-filters Key=Project,Values=code-server-ide \
+  --query 'ResourceTagMappingList[*].{Resource:ResourceARN,Tags:Tags[?Key==`Environment` || Key==`CostCenter` || Key==`Owner`]}' \
+  --output table
+
+echo ""
+echo "Current Month Costs by Project:"
+COST=$(aws ce get-cost-and-usage \
+  --time-period Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d) \
+  --granularity MONTHLY \
+  --metrics BlendedCost \
+  --filter '{"Tags":{"Key":"Project","Values":["code-server-ide"]}}' \
+  --query 'ResultsByTime[0].Total.BlendedCost.Amount' \
+  --output text)
+echo "Total Cost: \$$COST USD"
+
+echo ""
+echo "Resource Count by Type:"
+aws resourcegroupstaggingapi get-resources \
+  --tag-filters Key=Project,Values=code-server-ide \
+  --query 'ResourceTagMappingList[*].ResourceARN' \
+  --output text | cut -d: -f6 | sort | uniq -c
+EOF
+
+chmod +x tag-report.sh
+```
+
+### Cost Optimization Commands
+
+#### Resource Utilization
+```bash
+# Check EC2 instance utilization
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/EC2 \
+  --metric-name CPUUtilization \
+  --dimensions Name=InstanceId,Value=$INSTANCE_ID \
+  --start-time $(date -d '7 days ago' --iso-8601) \
+  --end-time $(date --iso-8601) \
+  --period 3600 \
+  --statistics Average \
+  --output table
+
+# Check EBS volume usage
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/EBS \
+  --metric-name VolumeReadOps \
+  --dimensions Name=VolumeId,Value=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text) \
+  --start-time $(date -d '24 hours ago' --iso-8601) \
+  --end-time $(date --iso-8601) \
+  --period 3600 \
+  --statistics Sum \
+  --output table
+```
+
+#### Cost Forecasting
+```bash
+# Get cost forecast for next month
+aws ce get-cost-forecast \
+  --time-period Start=$(date -d 'next month' +%Y-%m-01),End=$(date -d 'next month' +%Y-%m-31) \
+  --metric BLENDED_COST \
+  --granularity MONTHLY \
+  --filter '{"Tags":{"Key":"Project","Values":["code-server-ide"]}}' \
+  --output table
+```
+
+### Budget and Alerts
+
+#### Create Cost Budget
+```bash
+# Create monthly budget for the project
+aws budgets create-budget \
+  --account-id $(aws sts get-caller-identity --query Account --output text) \
+  --budget '{
+    "BudgetName": "code-server-ide-monthly",
+    "BudgetLimit": {
+      "Amount": "25.00",
+      "Unit": "USD"
+    },
+    "TimeUnit": "MONTHLY",
+    "BudgetType": "COST",
+    "CostFilters": {
+      "TagKey": ["Project"],
+      "TagValue": ["code-server-ide"]
+    }
+  }'
+```
 ```
