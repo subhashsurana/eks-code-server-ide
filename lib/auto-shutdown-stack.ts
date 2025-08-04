@@ -19,7 +19,8 @@ export class AutoShutdownStack extends cdk.Stack {
     const environment = props?.environment ?? 'dev';
     const naming = new ParameterNaming(appName, this.account, environment);
     const parameterName = naming.generateParameterName('compute', 'instance-id');
-    const instanceId = ssm.StringParameter.valueFromLookup(this, parameterName);
+    const instanceIdParam = ssm.StringParameter.fromStringParameterName(this, 'InstanceIdParam', parameterName);
+    const instanceId = instanceIdParam.stringValue;
 
     // Create auto-shutdown
     new AutoShutdown(this, 'AutoShutdown', {

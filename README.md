@@ -179,15 +179,19 @@ new AutoShutdownStack(app, 'AutoShutdown', {
 ## Usage
 
 ### Accessing the IDE
-1. **Get the URL**: Use the `IdeUrl` output from the main stack
-2. **Retrieve Password**: 
+1. **Start Instance** (if stopped by auto-shutdown):
+   ```bash
+   ./start-instance.sh
+   ```
+2. **Get the URL**: Use the `IdeUrl` output from the main stack
+3. **Retrieve Password**: 
    ```bash
    aws secretsmanager get-secret-value \
      --secret-id EksCodeServerIdeStackV2-password \
      --query SecretString --output text | jq -r .password
    ```
-3. **Login**: Access the URL and enter the password
-4. **Start Coding**: Pre-configured environment with EKS tools
+4. **Login**: Access the URL and enter the password
+5. **Start Coding**: Pre-configured environment with EKS tools
 
 ### SSM Session Manager Access (Alternative)
 ```bash
@@ -242,6 +246,56 @@ aws ssm start-session --target i-{instance-id} \
 - **GP3 EBS**: Cost-effective storage
 - **T3 Instances**: Burstable performance
 - **CloudFront**: Global edge caching
+
+### Cost Tracking & Monitoring
+
+#### Resource Tagging
+All resources are tagged for cost allocation:
+```
+Project: code-server-ide
+Environment: dev
+Application: EKS-Workshop-IDE
+Owner: DevOps
+CostCenter: Training
+Purpose: Development-Environment
+AutoShutdown: Enabled
+```
+
+#### Monthly Cost Estimates (us-west-2)
+| Resource | Instance Running | Instance Stopped | Notes |
+|----------|------------------|------------------|---------|
+| **EC2 t3.small** | $15.33/month | $0.00/month | Main cost driver |
+| **EBS GP3 30GB** | $2.40/month | $2.40/month | Always charged |
+| **CloudFront** | $0.50/month | $0.50/month | Minimal usage |
+| **Lambda** | $0.01/month | $0.01/month | Bootstrap function |
+| **Secrets Manager** | $0.40/month | $0.40/month | Password storage |
+| **KMS** | $1.00/month | $1.00/month | Encryption key |
+| **CloudWatch Logs** | $0.10/month | $0.10/month | Log retention |
+| **SSM Parameters** | $0.00/month | $0.00/month | Free tier |
+| **Total** | **~$19.74/month** | **~$4.41/month** | With auto-shutdown |
+
+#### Cost Monitoring Commands
+```bash
+# Get costs by tag
+aws ce get-cost-and-usage \
+  --time-period Start=2024-01-01,End=2024-01-31 \
+  --granularity MONTHLY \
+  --metrics BlendedCost \
+  --group-by Type=DIMENSION,Key=SERVICE Type=TAG,Key=Project
+
+# Get current month costs for this project
+aws ce get-cost-and-usage \
+  --time-period Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d) \
+  --granularity DAILY \
+  --metrics BlendedCost \
+  --filter '{"Tags":{"Key":"Project","Values":["code-server-ide"]}}'
+```
+
+#### Cost Optimization Tips
+- **Use Auto-Shutdown**: Saves ~$15/month when idle
+- **Right-Size Instance**: Start with t3.small, upgrade if needed
+- **Monitor Usage**: Check AWS Cost Explorer monthly
+- **Clean Up**: Destroy stack when not needed for extended periods
 
 ## IAM Policies & Permissions
 
@@ -336,10 +390,17 @@ cdk --app 'npx ts-node --prefer-ts-exts bin/config-app.ts' destroy
 - **Reverse Proxy**: Caddy receives request and forwards to code-server (localhost:8889)
 - **Response Path**: code-server → Caddy → CloudFront → Browser
 
+#### Parameter Management Strategy
+- **Static Configuration**: Uses `valueFromLookup` with CDK context caching for stable values
+- **Dynamic Resources**: Uses `fromStringParameterName` for runtime resolution of changing values
+- **Fallback Mechanism**: Automatic fallback to default values when parameters don't exist
+- **Context Management**: Clear CDK context when configuration values change
+
 #### Deployment Automation
 - **Bootstrap Process**: Lambda function coordinates instance setup via SSM
 - **Dynamic Updates**: CloudFront origin automatically updated from placeholder to real EC2 DNS
 - **State Management**: CREATE operations run full bootstrap, UPDATE operations only update CloudFront
+- **Instance Restart Handling**: start-instance.sh script automatically updates CloudFront origin after restart
 - **Self-Healing**: System automatically configures itself without manual intervention
 
 ## Troubleshooting
@@ -355,9 +416,12 @@ cdk --app 'npx ts-node --prefer-ts-exts bin/config-app.ts' destroy
 
 #### Runtime Issues
 - **Login Failed**: Check Secrets Manager for correct password and verify KMS permissions
-- **Auto-Shutdown Not Working**: Verify EventBridge rule is enabled
+- **Auto-Shutdown Not Working**: Verify EventBridge rule is enabled and instance ID is correct
 - **Performance Issues**: Consider upgrading instance type via Config Stack
 - **CloudFront Origin Issues**: Lambda automatically updates origin during deployment
+- **Parameter Lookup Failures**: Clear CDK context with `cdk context --clear` when values change
+- **Stale Cached Values**: Auto-shutdown using wrong instance ID indicates cached context values
+- **CloudFront 502 After Restart**: Instance gets new DNS on restart, use `./start-instance.sh` to update CloudFront origin
 
 ### Debugging Resources
 
@@ -388,6 +452,21 @@ aws ssm get-parameters-by-path \
 # Get specific parameter
 aws ssm get-parameter \
   --name "/code-server-ide/{account-id}/dev/compute/instance-id"
+```
+
+#### CDK Context Management
+```bash
+# Clear all cached context values
+cdk context --clear
+
+# List current context cache
+cdk context --list
+
+# Remove specific cached value
+cdk context --reset ssm:account=123:parameterName=/path:region=us-west-2
+
+# Deploy with fresh parameter lookups
+cdk context --clear && npm run deploy:main
 ```
 
 ## Architecture Diagram

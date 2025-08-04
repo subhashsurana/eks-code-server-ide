@@ -11,7 +11,8 @@ export interface ConfigProviderProps {
 export class ConfigProvider {
   static getFromSSM(scope: Construct, parameterName: string, defaultValue?: string): string {
     try {
-      return ssm.StringParameter.valueFromLookup(scope, parameterName);
+      const param = ssm.StringParameter.fromStringParameterName(scope, `Param-${parameterName.replace(/[^a-zA-Z0-9]/g, '')}`, parameterName);
+      return param.stringValue;
     } catch {
       return defaultValue || '';
     }
@@ -39,11 +40,22 @@ export class ConfigProvider {
     const config: any = {};
     Object.entries(resourceConfigs).forEach(([key, resourceConfig]) => {
       const parameterName = naming.generateParameterName(resourceConfig.resourceType, resourceConfig.resourceName);
-      const value = ssm.StringParameter.valueFromLookup(scope, parameterName);
-      if (key === 'instanceVolumeSize') {
-        config.instanceVolumeSize = parseInt(value);
-      } else {
-        config[key as keyof typeof config] = value;
+      // Use valueFromLookup for synth-time resolution with fallback
+      try {
+        const value = ssm.StringParameter.valueFromLookup(scope, parameterName);
+        if (key === 'instanceVolumeSize') {
+          config.instanceVolumeSize = parseInt(value || resourceConfig.defaultValue);
+        } else {
+          config[key as keyof typeof config] = value || resourceConfig.defaultValue;
+        }
+      } catch {
+        // Fallback to default value if parameter doesn't exist
+        const defaultValue = resourceConfig.defaultValue;
+        if (key === 'instanceVolumeSize') {
+          config.instanceVolumeSize = parseInt(defaultValue);
+        } else {
+          config[key as keyof typeof config] = defaultValue;
+        }
       }
     });
 

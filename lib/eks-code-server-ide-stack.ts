@@ -222,8 +222,21 @@ export class EksCodeServerIdeStack extends cdk.Stack {
     // Add CloudFront security group to instance
     instance.addSecurityGroup(cloudFrontSG);
 
-    // Add Project tag for SSM access control
-    cdk.Tags.of(instance).add('Project', 'code-server-ide');
+    // Add comprehensive tags for cost tracking and management
+    const commonTags = {
+      'Project': 'code-server-ide',
+      'Environment': parameterEnvironment,
+      'Application': 'EKS-Workshop-IDE',
+      'Owner': 'DevOps',
+      'CostCenter': 'Training',
+      'Purpose': 'Development-Environment',
+      'AutoShutdown': 'Enabled'
+    };
+    
+    // Apply tags to all resources in the stack
+    Object.entries(commonTags).forEach(([key, value]) => {
+      cdk.Tags.of(this).add(key, value);
+    });
 
     // CloudFront Cache Policy
     new cloudfront.CachePolicy(this, 'EksWorkshopIdeCachePolicy', {
@@ -437,6 +450,11 @@ export class EksCodeServerIdeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'InstanceIdParameter', {
       value: naming.generateParameterName('compute', 'instance-id'),
       description: 'SSM Parameter name for Instance ID'
+    });
+
+    new cdk.CfnOutput(this, 'CloudFrontDistributionId', {
+      value: distribution.distributionId,
+      description: 'CloudFront Distribution ID'
     });
 
   }
